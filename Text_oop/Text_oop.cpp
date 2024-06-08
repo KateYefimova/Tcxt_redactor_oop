@@ -1,6 +1,6 @@
 ﻿#include <iostream>
 #include <fstream>
-#include <cstring>
+#include <stack>
 
 #ifdef _WIN32
 #define CLEAR_COMMAND "cls"
@@ -15,12 +15,14 @@ private:
     int current_line;
     char* clipboard;
     char** lines;
-
+    std::stack<char**> undoStack;
+    std::stack<char**> redoStack;
 public:
     TextEditor() {
         current_line = 0;
         clipboard = nullptr;
         lines = nullptr;
+        
     }
 
     ~TextEditor() {
@@ -32,6 +34,34 @@ public:
         }
         if (clipboard != nullptr) {
             delete[] clipboard;
+        }
+    }
+    void saveState() {
+        char** newState = new char* [current_line];
+        for (int i = 0; i < current_line; i++) {
+            newState[i] = _strdup(lines[i]);
+        }
+        undoStack.push(newState);
+    }
+    void clearState(char** state) {
+        for (int i = 0; i < current_line; i++) {
+            delete[] state[i];
+        }
+        delete[] state;
+    }
+    void restoreState(std::stack<char**>& stack) {
+        if (!stack.empty()) {
+            if (!redoStack.empty()) {
+                // Clear redo stack if we're restoring a state
+                while (!redoStack.empty()) {
+                    char** state = redoStack.top();
+                    redoStack.pop();
+                    clearState(state);
+                }
+            }
+            clearState(lines);
+            lines = stack.top();
+            stack.pop();
         }
     }
 
@@ -349,18 +379,39 @@ public:
         buffer[len] = '\0';
         return buffer;
     }
+    void undo() {
+        if (undoStack.size() > 1) {
+            redoStack.push(undoStack.top());
+            undoStack.pop();
+            restoreState(undoStack);
+        }
+        else {
+            std::cout << "Already at initial state." << std::endl;
+        }
+    }
+
+    void redo() {
+        if (!redoStack.empty()) {
+            undoStack.push(redoStack.top());
+            restoreState(redoStack);
+        }
+        else {
+            std::cout << "Nothing to redo." << std::endl;
+        }
+    }
 
     void run() {
         int command;
         show_menu();
         while (true) {
             std::cout << "Enter the command: ";
-            if (scanf_s("%d", &command) != 1) {
-                std::cout << "Invalid command. Please enter a number between 1 and 9." << std::endl;
-                while (getchar() != '\n');
+            std::cin >> command;
+            if (command < 1 || command > 17) {
+                std::cout << "Invalid command. Please enter a number between 1 and 17." << std::endl;
                 continue;
             }
-            getchar();
+            
+            saveState();
 
             switch (command) {
             case 1: {
@@ -375,10 +426,12 @@ public:
                 free(to_append);
                 break;
             }
-            case 2:
+
+            case 2: {
                 start_new_line();
                 std::cout << "New line started" << std::endl;
                 break;
+            }
             case 3: {
                 std::cout << "Enter the file name for saving: ";
                 char* filename = read_line();
@@ -396,12 +449,13 @@ public:
                 free(load_filename);
                 break;
             }
-            case 5:
+            case 5: {
                 std::cout << "Current text:" << std::endl;
                 for (int i = 0; i < current_line; i++) {
                     std::cout << lines[i] << std::endl;
                 }
                 break;
+            }
             case 6: {
                 std::cout << "Choose line and index:" << std::endl;
                 int line, index;
@@ -437,10 +491,11 @@ public:
                 delete_text(line, index, length);
                 break;
             }
-            case 9:
+            case 9: {
                 clear_console();
                 show_menu();
                 break;
+            }
             case 10:
                 std::cout << "Exiting..." << std::endl;
                 return;
@@ -480,7 +535,7 @@ public:
                 copy_text(line, index, length);
                 break;
             }
-            case 14: {
+            case 15: {
                 std::cout << "Choose line and index:" << std::endl;
                 int line, index;
                 if (scanf_s("%d %d", &line, &index) != 2) {
@@ -495,6 +550,13 @@ public:
                 free(text);
                 break;
             }
+            case 14:  // Undo
+                undo();
+                break;
+            case 16: // Redo
+                redo();
+                break;
+            
             default:
                 std::cout << "The command is not implemented." << std::endl;
             }
