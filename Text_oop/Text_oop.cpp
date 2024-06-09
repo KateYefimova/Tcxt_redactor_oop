@@ -1,6 +1,9 @@
 ﻿#include <iostream>
+#include <limits>
+#include <conio.h>
 #include <fstream>
 #include <stack>
+#include <windows.h>
 
 #ifdef _WIN32
 #define CLEAR_COMMAND "cls"
@@ -9,13 +12,18 @@
 #endif
 
 #define INITIAL_BUFFER_SIZE 100
+#define KEY_UP 72
+#define KEY_DOWN 80
+#define KEY_LEFT 75
+#define KEY_RIGHT 77
 
 class TextEditor {
 private:
     int current_line;
     char* clipboard;
     char** lines;
-
+    int cursor_line;
+    int cursor_index;
     std::stack<char**> undo_stack;
     std::stack<char**> redo_stack;
     std::stack<int> undo_line_counts;
@@ -68,7 +76,8 @@ public:
         current_line = 0;
         clipboard = nullptr;
         lines = nullptr;
-
+        cursor_line = 0;
+        cursor_index = 0;
     }
 
     ~TextEditor() {
@@ -85,6 +94,102 @@ public:
         clear_stack(redo_stack, redo_line_counts);
     }
 
+    void display_text_with_cursor() {
+
+        system(CLEAR_COMMAND);
+        for (int i = 0; i < current_line; ++i) {
+            if (i == cursor_line) {
+                for (int j = 0; j < strlen(lines[i]); ++j) {
+                    if (j == cursor_index) {
+                        std::cout << '|'; // Символ курсору
+                    }
+                    std::cout << lines[i][j];
+                }
+                // Якщо курсор в кінці рядка
+                if (cursor_index == strlen(lines[i])) {
+                    std::cout << '|';
+                }
+                std::cout << std::endl;
+            }
+            else {
+                std::cout << lines[i] << std::endl;
+            }
+        }
+    }
+
+    // Перемістити курсор вгору
+    void move_cursor_up() {
+        cursor_line--;
+        if (cursor_line < 0) cursor_line = 0;
+        cursor_index = min(cursor_index, strlen(lines[cursor_line]));
+    }
+
+    // Перемістити курсор вниз
+    void move_cursor_down() {
+        cursor_line++;
+        if (cursor_line >= current_line) cursor_line = current_line - 1;
+        cursor_index = min(cursor_index, strlen(lines[cursor_line]));
+    }
+
+    // Перемістити курсор вліво
+    void move_cursor_left() {
+        cursor_index--;
+        if (cursor_index < 0) {
+            if (cursor_line > 0) {
+                cursor_line--;
+                cursor_index = strlen(lines[cursor_line]);
+            }
+            else {
+                cursor_index = 0;
+            }
+        }
+    }
+
+    // Перемістити курсор вправо
+    void move_cursor_right() {
+        cursor_index++;
+        int line_length = strlen(lines[cursor_line]);
+        if (cursor_index > line_length) {
+            cursor_index = line_length;
+            if (cursor_line < current_line - 1) {
+                cursor_line++;
+                cursor_index = 0;
+            }
+        }
+    }
+
+    void move_cursor_with_keys() {
+        while (true) {
+            display_text_with_cursor(); // Display the text with cursor
+
+            if (_kbhit()) {
+                int ch = _getch();
+                if (ch == 224) { // Special keys (arrows)
+                    switch (_getch()) {
+                    case KEY_UP:
+                        move_cursor_up();
+                        break;
+                    case KEY_DOWN:
+                        move_cursor_down();
+                        break;
+                    case KEY_LEFT:
+                        move_cursor_left();
+                        break;
+                    case KEY_RIGHT:
+                        move_cursor_right();
+                        break;
+                    }
+                }
+
+                // Exit loop when Enter is pressed
+                if (ch == 13) { // Enter key
+                    break;
+                }
+            }
+
+            Sleep(100); // Small delay to prevent high CPU usage
+        }
+    }
 
     void clear_console() {
         system(CLEAR_COMMAND);
@@ -110,8 +215,8 @@ public:
             strcat_s(lines[current_line - 1], original_length + to_append_length + 2, " ");
         }
         strcat_s(lines[current_line - 1], original_length + to_append_length + 2, to_append);
-
     }
+
     void start_new_line() {
         save_snapshot(undo_stack, undo_line_counts);
         clear_stack(redo_stack, redo_line_counts);
@@ -124,7 +229,6 @@ public:
         delete[] lines;
         lines = temp;
         current_line++;
-
     }
 
     void save_to_file(const char* filename) {
@@ -390,7 +494,7 @@ public:
         std::cout << "5. Print the current text to console" << std::endl;
         std::cout << "6. Insert the text by line and symbol index" << std::endl;
         std::cout << "7. Search" << std::endl;
-        std::cout << "8. Delete text by line, index, and length" << std::endl; 
+        std::cout << "8. Delete text by line, index, and length" << std::endl; // New command
         std::cout << "9. Clear console" << std::endl;
         std::cout << "10. Undo" << std::endl;
         std::cout << "11. Redo" << std::endl;
@@ -400,6 +504,13 @@ public:
         std::cout << "15. Insert with replacement" << std::endl;
         std::cout << "16. Show menu" << std::endl;
         std::cout << "17. Exit" << std::endl;
+    }
+    int set_cursor() {
+        move_cursor_with_keys();
+        std::pair<int, int> cursor_position = get_cursor_position();
+        int line = cursor_position.first;
+        int index = cursor_position.second;
+        return line, index;
     }
 
     char* read_line() {
@@ -416,11 +527,13 @@ public:
             buffer[len++] = ch;
             if (len == size) {
                 size *= 2;
-                buffer = (char*)realloc(buffer, size);
-                if (!buffer) {
+                char* temp_buffer = (char*)realloc(buffer, size);
+                if (!temp_buffer) {
                     std::cout << "Memory reallocation failed" << std::endl;
+                    free(buffer);
                     exit(EXIT_FAILURE);
                 }
+                buffer = temp_buffer;
             }
         }
         buffer[len] = '\0';
@@ -441,169 +554,11 @@ public:
             std::cout << "No lines" << std::endl;
         }
     }
-
-    void run() {
-        int command;
-        show_menu();
-        while (true) {
-            std::cout << "Enter the command: ";
-            std::cin >> command;
-            if (command < 1 || command > 17) {
-                std::cout << "Invalid command. Please enter a number between 1 and 17." << std::endl;
-                continue;
-            }
-
-            switch (command) {
-            case 1: {
-
-                std::cout << "Enter text to append: ";
-                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                char* to_append = read_line();
-
-                if (current_line == 0) {
-                    start_new_line();
-                }
-
-                append_text(to_append);
-                free(to_append);
-                break;
-            }
-
-            case 2: {
-                start_new_line();
-                std::cout << "New line started" << std::endl;
-                break;
-            }
-            case 3: {
-                std::cout << "Enter the file name for saving: ";
-                char* filename = read_line();
-
-                save_to_file(filename);
-                free(filename);
-                break;
-            }
-            case 4: {
-                std::cout << "Enter the file name for loading: ";
-
-                char* load_filename = read_line();
-
-                load_from_file(load_filename);
-                free(load_filename);
-                break;
-            }
-            case 5: {
-                display_text();
-                break;
-            }
-            case 6: {
-                std::cout << "Choose line and index:" << std::endl;
-                int line, index;
-                if (scanf_s("%d %d", &line, &index) != 2) {
-                    std::cout << "Invalid input. Please enter two numbers." << std::endl;
-                    while (getchar() != '\n');
-                    break;
-                }
-                getchar();
-                std::cout << "Enter text to insert:" << std::endl;
-                char* text = read_line();
-                insert_text(line, index, text);
-                free(text);
-                break;
-            }
-            case 7: {
-                std::cout << "Enter text to search:" << std::endl;
-                char* text_to_search = read_line();
-                std::cout << "Text found at these positions:" << std::endl;
-                search_text(text_to_search);
-                free(text_to_search);
-                break;
-            }
-            case 8: { // New case for delete
-                std::cout << "Choose line, index, and length to delete:" << std::endl;
-                int line, index, length;
-                if (scanf_s("%d %d %d", &line, &index, &length) != 3) {
-                    std::cout << "Invalid input. Please enter three numbers." << std::endl;
-                    while (getchar() != '\n');
-                    break;
-                }
-                getchar();
-                delete_text(line, index, length);
-                break;
-            }
-            case 9: {
-                clear_console();
-                show_menu();
-                break;
-            }
-            case 10: // Undo
-                undo();
-                break;
-            case 11: // Redo
-                redo();
-                break;
-            case 12: {
-                std::cout << "Choose line, index, and length to cut:" << std::endl;
-                int line, index, length;
-                if (scanf_s("%d %d %d", &line, &index, &length) != 3) {
-                    std::cout << "Invalid input. Please enter three numbers." << std::endl;
-                    while (getchar() != '\n');
-                    break;
-                }
-                getchar();
-                cut_text(line, index, length);
-                break;
-            }
-            case 13: {
-                std::cout << "Choose line and index to paste:" << std::endl;
-                int line, index;
-                if (scanf_s("%d %d", &line, &index) != 2) {
-                    std::cout << "Invalid input. Please enter two numbers." << std::endl;
-                    while (getchar() != '\n');
-                    break;
-                }
-                getchar();
-                paste_text(line, index);
-                break;
-            }
-            case 14: {
-                std::cout << "Choose line, index, and length to copy:" << std::endl;
-                int line, index, length;
-                if (scanf_s("%d %d %d", &line, &index, &length) != 3) {
-                    std::cout << "Invalid input. Please enter three numbers." << std::endl;
-                    while (getchar() != '\n');
-                    break;
-                }
-                getchar();
-                copy_text(line, index, length);
-                break;
-            }
-            case 15: {
-                std::cout << "Choose line, index, and text to insert with replacement:" << std::endl;
-                int line, index;
-                if (scanf_s("%d %d", &line, &index) != 2) {
-                    std::cout << "Invalid input. Please enter two numbers." << std::endl;
-                    while (getchar() != '\n');
-                    break;
-                }
-                getchar();
-                std::cout << "Enter text to insert with replacement:" << std::endl;
-                char* text = read_line();
-                insert_text_with_replacement(line, index, text);
-                free(text);
-                break;
-            }
-            case 16: {
-                show_menu();
-                break;
-            }
-            case 17:
-                std::cout << "Exiting..." << std::endl;
-                exit(0);
-            default:
-                std::cout << "The command is not implemented." << std::endl;
-            }
-        }
+    std::pair<int, int> get_cursor_position() {
+        return { cursor_line, cursor_index };
     }
+
+    void run();
 };
 
 int main() {
@@ -613,4 +568,179 @@ int main() {
     return 0;
 }
 
+inline void TextEditor::run() {
+    int command;
+    while (true) {
+        show_menu();
+        std::cout << "Enter the command: ";
 
+        std::cin >> command;
+        if (command < 1 || command > 17) {
+            std::cout << "Invalid command. Please enter a number between 1 and 17." << std::endl;
+            continue;
+        }
+        show_menu();
+        switch (command) {
+        case 1: {
+            clear_console();
+            std::cout << "Enter text to append: ";
+            std::cin.ignore();
+
+            if (current_line == 0) {
+                start_new_line();
+            }
+
+            char* to_append = read_line();
+            append_text(to_append);
+            free(to_append);
+            break;
+        }
+        case 2: {
+            clear_console();
+            start_new_line();
+            std::cout << "New line started" << std::endl;
+            break;
+        }
+        case 3: {
+            clear_console();
+            std::cout << "Enter the file name for saving: ";
+            char* filename = read_line();
+
+            save_to_file(filename);
+            free(filename);
+            break;
+        }
+        case 4: {
+            clear_console();
+            std::cout << "Enter the file name for loading: ";
+
+            char* load_filename = read_line();
+
+            load_from_file(load_filename);
+            free(load_filename);
+            break;
+        }
+        case 5: {
+            clear_console();
+            display_text();
+            break;
+        }
+        case 6: {
+
+            move_cursor_with_keys();
+            std::pair<int, int> cursor_position = get_cursor_position();
+            int line = cursor_position.first;
+            int index = cursor_position.second;
+            std::cout << "Enter text to insert:" << std::endl;
+            std::cin.ignore();
+            char* text = read_line();
+            insert_text(line, index, text);
+            free(text);
+            break;
+        }
+        case 7: {
+            clear_console();
+            std::cout << "Enter text to search:" << std::endl;
+            char* text_to_search = read_line();
+            std::cout << "Text found at these positions:" << std::endl;
+            search_text(text_to_search);
+            free(text_to_search);
+            break;
+        }
+        case 8: {
+            move_cursor_with_keys();
+            std::pair<int, int> cursor_position = get_cursor_position();
+            int line = cursor_position.first;
+            int index = cursor_position.second;
+            std::cout << "Choose length to delete:" << std::endl;
+            std::cin.ignore();
+            int  length;
+            if (scanf_s("%d", &length) != 1) {
+                std::cout << "Invalid input. Please enter one numbers." << std::endl;
+                while (getchar() != '\n');
+                break;
+            }
+            getchar();
+            delete_text(line, index, length);
+            break;
+        }
+        case 9: {
+            clear_console();
+            show_menu();
+            break;
+        }
+        case 10: // Undo
+            clear_console();
+            undo();
+            break;
+        case 11: // Redo
+            clear_console();
+            redo();
+            break;
+        case 12: {
+            move_cursor_with_keys();
+            std::pair<int, int> cursor_position = get_cursor_position();
+            int line = cursor_position.first;
+            int index = cursor_position.second;
+            std::cout << "Choose  length to cut:" << std::endl;
+            std::cin.ignore();
+            int  length;
+            if (scanf_s("%d", &length) != 1) {
+                std::cout << "Invalid input. Please enter one numbers." << std::endl;
+                while (getchar() != '\n');
+                break;
+            }
+            getchar();
+            cut_text(line, index, length);
+            break;
+        }
+        case 13: {
+            move_cursor_with_keys();
+            std::pair<int, int> cursor_position = get_cursor_position();
+            int line = cursor_position.first;
+            int index = cursor_position.second;
+            paste_text(line, index);
+            break;
+        }
+        case 14: {
+            move_cursor_with_keys();
+            std::pair<int, int> cursor_position = get_cursor_position();
+            int line = cursor_position.first;
+            int index = cursor_position.second;
+            std::cout << "Choose length to copy:" << std::endl;
+            std::cin.ignore();
+            int  length;
+            if (scanf_s("%d", &length) != 1) {
+                std::cout << "Invalid input. Please enter one numbers." << std::endl;
+                while (getchar() != '\n');
+                break;
+            }
+            getchar();
+            copy_text(line, index, length);
+            break;
+        }
+        case 15: {
+            move_cursor_with_keys();
+            std::pair<int, int> cursor_position = get_cursor_position();
+            int line = cursor_position.first;
+            int index = cursor_position.second;
+
+            std::cout << "Enter text to insert with replacement:" << std::endl;
+            std::cin.ignore();
+            char* text = read_line();
+            insert_text_with_replacement(line, index, text);
+            free(text);
+            break;
+        }
+        case 16: {
+            show_menu();
+            break;
+        }
+        case 17:
+            std::cout << "Exiting..." << std::endl;
+            exit(0);
+        default:
+            std::cout << "The command is not implemented." << std::endl;
+        }
+    }
+}
