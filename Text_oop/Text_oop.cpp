@@ -15,14 +15,60 @@ private:
     int current_line;
     char* clipboard;
     char** lines;
-    std::stack<char**> undoStack;
-    std::stack<char**> redoStack;
+
+    std::stack<char**> undo_stack;
+    std::stack<char**> redo_stack;
+    std::stack<int> undo_line_counts;
+    std::stack<int> redo_line_counts;
+
+    void save_snapshot(std::stack<char**>& stack, std::stack<int>& line_count_stack) {
+        char** snapshot = new char* [current_line];
+        for (int i = 0; i < current_line; ++i) {
+            size_t length = strlen(lines[i]) + 1;
+            snapshot[i] = new char[length];
+            strcpy_s(snapshot[i], length, lines[i]);
+        }
+        stack.push(snapshot);
+        line_count_stack.push(current_line);
+    }
+
+    void restore_snapshot(std::stack<char**>& stack, std::stack<int>& line_count_stack) {
+        if (stack.empty()) {
+            return;
+        }
+
+        if (lines != nullptr) {
+            for (int i = 0; i < current_line; ++i) {
+                delete[] lines[i];
+            }
+            delete[] lines;
+        }
+
+        lines = stack.top();
+        current_line = line_count_stack.top();
+        stack.pop();
+        line_count_stack.pop();
+    }
+
+    void clear_stack(std::stack<char**>& stack, std::stack<int>& line_count_stack) {
+        while (!stack.empty()) {
+            char** snapshot = stack.top();
+            int count = line_count_stack.top();
+            for (int i = 0; i < count; ++i) {
+                delete[] snapshot[i];
+            }
+            delete[] snapshot;
+            stack.pop();
+            line_count_stack.pop();
+        }
+    }
+
 public:
     TextEditor() {
         current_line = 0;
         clipboard = nullptr;
         lines = nullptr;
-        
+
     }
 
     ~TextEditor() {
@@ -35,35 +81,10 @@ public:
         if (clipboard != nullptr) {
             delete[] clipboard;
         }
+        clear_stack(undo_stack, undo_line_counts);
+        clear_stack(redo_stack, redo_line_counts);
     }
-    void saveState() {
-        char** newState = new char* [current_line];
-        for (int i = 0; i < current_line; i++) {
-            newState[i] = _strdup(lines[i]);
-        }
-        undoStack.push(newState);
-    }
-    void clearState(char** state) {
-        for (int i = 0; i < current_line; i++) {
-            delete[] state[i];
-        }
-        delete[] state;
-    }
-    void restoreState(std::stack<char**>& stack) {
-        if (!stack.empty()) {
-            if (!redoStack.empty()) {
-                // Clear redo stack if we're restoring a state
-                while (!redoStack.empty()) {
-                    char** state = redoStack.top();
-                    redoStack.pop();
-                    clearState(state);
-                }
-            }
-            clearState(lines);
-            lines = stack.top();
-            stack.pop();
-        }
-    }
+
 
     void clear_console() {
         system(CLEAR_COMMAND);
@@ -85,24 +106,25 @@ public:
 
         lines[current_line - 1] = temp;
 
-
         if (original_length > 0) {
             strcat_s(lines[current_line - 1], original_length + to_append_length + 2, " ");
         }
         strcat_s(lines[current_line - 1], original_length + to_append_length + 2, to_append);
-    }
 
+    }
     void start_new_line() {
+        save_snapshot(undo_stack, undo_line_counts);
+        clear_stack(redo_stack, redo_line_counts);
         char** temp = new char* [current_line + 1];
         for (int i = 0; i < current_line; i++) {
             temp[i] = lines[i];
         }
+        temp[current_line] = new char[INITIAL_BUFFER_SIZE];
+        strcpy_s(temp[current_line], INITIAL_BUFFER_SIZE, "");
         delete[] lines;
         lines = temp;
-
-        lines[current_line] = new char[INITIAL_BUFFER_SIZE];
-        lines[current_line][0] = '\0';
         current_line++;
+
     }
 
     void save_to_file(const char* filename) {
@@ -156,7 +178,6 @@ public:
         while (file.getline(buffer, buffer_size)) {
             size_t len = strlen(buffer);
             while (len > 0 && buffer[len - 1] != '\n') {
-
                 buffer_size *= 2;
                 buffer = (char*)realloc(buffer, buffer_size);
                 if (buffer == nullptr) {
@@ -216,6 +237,8 @@ public:
     }
 
     void insert_text(int line, int index, const char* text) {
+        save_snapshot(undo_stack, undo_line_counts);
+        clear_stack(redo_stack, redo_line_counts);
         if (line >= current_line || line < 0) {
             std::cout << "Invalid line number." << std::endl;
             return;
@@ -239,6 +262,8 @@ public:
     }
 
     void insert_text_with_replacement(int line, int index, const char* text) {
+        save_snapshot(undo_stack, undo_line_counts);
+        clear_stack(redo_stack, redo_line_counts);
         if (line >= current_line || line < 0) {
             std::cout << "Invalid line number." << std::endl;
             return;
@@ -282,6 +307,8 @@ public:
     }
 
     void delete_text(int line, int index, int length) {
+        save_snapshot(undo_stack, undo_line_counts);
+        clear_stack(redo_stack, redo_line_counts);
         if (line >= current_line || line < 0) {
             std::cout << "Invalid line number." << std::endl;
             return;
@@ -312,9 +339,9 @@ public:
         }
 
         if (clipboard != nullptr) {
-            free(clipboard);
+            delete[] clipboard;
         }
-        clipboard = (char*)malloc(length + 1);
+        clipboard = new char[length + 1];
         if (clipboard == nullptr) {
             std::cout << "Memory allocation failed" << std::endl;
             return;
@@ -337,6 +364,23 @@ public:
         delete_text(line, index, length);
     }
 
+    void undo() {
+        if (undo_stack.empty()) {
+            std::cout << "No actions to undo." << std::endl;
+            return;
+        }
+        save_snapshot(redo_stack, redo_line_counts);
+        restore_snapshot(undo_stack, undo_line_counts);
+    }
+
+    void redo() {
+        if (redo_stack.empty()) {
+            std::cout << "No actions to redo." << std::endl;
+            return;
+        }
+        save_snapshot(undo_stack, undo_line_counts);
+        restore_snapshot(redo_stack, redo_line_counts);
+    }
     void show_menu() {
         std::cout << "Choose the command:" << std::endl;
         std::cout << "1. Append text symbols to the end" << std::endl;
@@ -346,13 +390,16 @@ public:
         std::cout << "5. Print the current text to console" << std::endl;
         std::cout << "6. Insert the text by line and symbol index" << std::endl;
         std::cout << "7. Search" << std::endl;
-        std::cout << "8. Delete text by line, index, and length" << std::endl; // New command
+        std::cout << "8. Delete text by line, index, and length" << std::endl; 
         std::cout << "9. Clear console" << std::endl;
-        std::cout << "10. Exit" << std::endl;
-        std::cout << "11. Cut text" << std::endl;
-        std::cout << "12. Paste text" << std::endl;
-        std::cout << "13. Copy text" << std::endl;
-        std::cout << "14. Insert with replacement" << std::endl;
+        std::cout << "10. Undo" << std::endl;
+        std::cout << "11. Redo" << std::endl;
+        std::cout << "12. Cut text" << std::endl;
+        std::cout << "13. Paste text" << std::endl;
+        std::cout << "14. Copy text" << std::endl;
+        std::cout << "15. Insert with replacement" << std::endl;
+        std::cout << "16. Show menu" << std::endl;
+        std::cout << "17. Exit" << std::endl;
     }
 
     char* read_line() {
@@ -379,24 +426,19 @@ public:
         buffer[len] = '\0';
         return buffer;
     }
-    void undo() {
-        if (undoStack.size() > 1) {
-            redoStack.push(undoStack.top());
-            undoStack.pop();
-            restoreState(undoStack);
-        }
-        else {
-            std::cout << "Already at initial state." << std::endl;
-        }
-    }
+    void display_text() const {
+        std::cout << "Current text:" << std::endl;
+        bool hasLines = false;
 
-    void redo() {
-        if (!redoStack.empty()) {
-            undoStack.push(redoStack.top());
-            restoreState(redoStack);
+        for (int i = 0; i < current_line; i++) {
+            if (lines[i] != nullptr) {
+                std::cout << lines[i] << std::endl;
+                hasLines = true;
+            }
         }
-        else {
-            std::cout << "Nothing to redo." << std::endl;
+
+        if (!hasLines) {
+            std::cout << "No lines" << std::endl;
         }
     }
 
@@ -410,12 +452,12 @@ public:
                 std::cout << "Invalid command. Please enter a number between 1 and 17." << std::endl;
                 continue;
             }
-            
-            saveState();
 
             switch (command) {
             case 1: {
+
                 std::cout << "Enter text to append: ";
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
                 char* to_append = read_line();
 
                 if (current_line == 0) {
@@ -450,10 +492,7 @@ public:
                 break;
             }
             case 5: {
-                std::cout << "Current text:" << std::endl;
-                for (int i = 0; i < current_line; i++) {
-                    std::cout << lines[i] << std::endl;
-                }
+                display_text();
                 break;
             }
             case 6: {
@@ -496,10 +535,13 @@ public:
                 show_menu();
                 break;
             }
-            case 10:
-                std::cout << "Exiting..." << std::endl;
-                return;
-            case 11: {
+            case 10: // Undo
+                undo();
+                break;
+            case 11: // Redo
+                redo();
+                break;
+            case 12: {
                 std::cout << "Choose line, index, and length to cut:" << std::endl;
                 int line, index, length;
                 if (scanf_s("%d %d %d", &line, &index, &length) != 3) {
@@ -511,7 +553,7 @@ public:
                 cut_text(line, index, length);
                 break;
             }
-            case 12: {
+            case 13: {
                 std::cout << "Choose line and index to paste:" << std::endl;
                 int line, index;
                 if (scanf_s("%d %d", &line, &index) != 2) {
@@ -523,7 +565,7 @@ public:
                 paste_text(line, index);
                 break;
             }
-            case 13: {
+            case 14: {
                 std::cout << "Choose line, index, and length to copy:" << std::endl;
                 int line, index, length;
                 if (scanf_s("%d %d %d", &line, &index, &length) != 3) {
@@ -536,7 +578,7 @@ public:
                 break;
             }
             case 15: {
-                std::cout << "Choose line and index:" << std::endl;
+                std::cout << "Choose line, index, and text to insert with replacement:" << std::endl;
                 int line, index;
                 if (scanf_s("%d %d", &line, &index) != 2) {
                     std::cout << "Invalid input. Please enter two numbers." << std::endl;
@@ -544,19 +586,19 @@ public:
                     break;
                 }
                 getchar();
-                std::cout << "Enter text to insert:" << std::endl;
+                std::cout << "Enter text to insert with replacement:" << std::endl;
                 char* text = read_line();
                 insert_text_with_replacement(line, index, text);
                 free(text);
                 break;
             }
-            case 14:  // Undo
-                undo();
+            case 16: {
+                show_menu();
                 break;
-            case 16: // Redo
-                redo();
-                break;
-            
+            }
+            case 17:
+                std::cout << "Exiting..." << std::endl;
+                exit(0);
             default:
                 std::cout << "The command is not implemented." << std::endl;
             }
